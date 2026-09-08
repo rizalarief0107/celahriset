@@ -8,17 +8,15 @@ st.set_page_config(
     page_title="Pencari Celah Riset (Research Gap AI)",
     page_icon="🔍",
     layout="wide",
-    initial_sidebar_state="collapsed" # Menyembunyikan sidebar bawaan
+    initial_sidebar_state="collapsed" 
 )
 
-# Kustomisasi CSS untuk membuat tampilan bersih (SaaS Modern)
 st.markdown("""
     <style>
-    #MainMenu {visibility: hidden;} /* Sembunyikan menu atas */
-    header {visibility: hidden;}   /* Sembunyikan header default */
-    footer {visibility: hidden;}   /* Sembunyikan footer default */
+    #MainMenu {visibility: hidden;} 
+    header {visibility: hidden;}   
+    footer {visibility: hidden;}   
     
-    /* Memperbesar ukuran teks input pencarian */
     .stTextInput input {
         font-size: 1.1rem !important;
         padding: 14px !important;
@@ -30,7 +28,6 @@ st.markdown("""
         box-shadow: 0 0 8px rgba(76, 175, 80, 0.2);
     }
     
-    /* Desain kartu referensi */
     .source-card {
         background-color: #f9f9f9;
         padding: 15px;
@@ -41,7 +38,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- MANAJEMEN STATE (Untuk pindah layar awal ke layar hasil) ---
+# --- MANAJEMEN STATE ---
 if "telah_mencari" not in st.session_state:
     st.session_state.telah_mencari = False
 if "topik_riset" not in st.session_state:
@@ -56,7 +53,7 @@ def reset_pencarian():
     st.session_state.telah_mencari = False
     st.session_state.topik_riset = ""
 
-# --- FUNGSI PENGAMBILAN KORPUS (SAMA SEPERTI SEBELUMNYA) ---
+# --- FUNGSI PENGAMBILAN KORPUS (DIPERBAIKI DENGAN JALUR PRIORITAS) ---
 def ambil_korpus_ilmiah(topik: str, cakupan: str, batas_tahun: int, jumlah_paper: int):
     url = "https://api.openalex.org/works"
     filter_params = ["has_abstract:true", f"from_publication_date:{batas_tahun}-01-01"]
@@ -65,13 +62,17 @@ def ambil_korpus_ilmiah(topik: str, cakupan: str, batas_tahun: int, jumlah_paper
         filter_params.append("authorships.institutions.country_code:ID")
     
     params = {
-        "search": topik, "filter": ",".join(filter_params),
-        "sort": "cited_by_count:desc", "per_page": jumlah_paper
+        "search": topik, 
+        "filter": ",".join(filter_params),
+        "sort": "cited_by_count:desc", 
+        "per_page": jumlah_paper,
+        "mailto": "riset.akademik.indonesia@gmail.com" # <--- INI KUNCI ANTI-BLOKIRNYA (Polite Pool)
     }
     
     try:
-        res = requests.get(url, params=params, timeout=15)
-        res.raise_for_status()
+        # Timeout diperpanjang jadi 20 detik agar tidak mudah terputus
+        res = requests.get(url, params=params, timeout=20)
+        res.raise_for_status() # Akan memunculkan error detail jika server menolak
         data = res.json()
         
         papers = []
@@ -100,11 +101,21 @@ def ambil_korpus_ilmiah(topik: str, cakupan: str, batas_tahun: int, jumlah_paper
                 abstract = " ".join([w[1] for w in words])[:800] + "..."
 
             papers.append({"title": title, "year": year, "doi": doi, "citations": citations, "institusi": institusi_str, "abstract": abstract})
+        
         return papers
+        
+    # PENANGANAN ERROR AGAR KITA TAHU PENYEBABNYA
+    except requests.exceptions.HTTPError as err:
+        st.error(f"❌ Server jurnal menolak akses (HTTP Error): {err}")
+        return []
+    except requests.exceptions.Timeout:
+        st.error("❌ Waktu pencarian habis (Timeout). Database sedang lambat, coba lagi.")
+        return []
     except Exception as e:
+        st.error(f"❌ Terjadi kesalahan sistem: {e}")
         return []
 
-# --- FUNGSI REASONING GEMINI (SAMA SEBELUMNYA) ---
+# --- FUNGSI REASONING GEMINI ---
 def bedah_celah_riset(topik: str, papers: list, cakupan: str, api_key: str):
     client = genai.Client(api_key=api_key)
     ringkasan_korpus = "".join([f"\n- {p['title']} ({p['year']}). Abstrak: {p['abstract']}" for p in papers])
@@ -122,39 +133,34 @@ def bedah_celah_riset(topik: str, papers: list, cakupan: str, api_key: str):
     return response.text
 
 # ==========================================
-# 1. TAMPILAN AWAL (SEPERTI GOOGLE / ANSWERTHIS)
+# 1. TAMPILAN AWAL (BERANDA)
 # ==========================================
 if not st.session_state.telah_mencari:
-    # Membuat jarak kosong di atas agar ke tengah layar
     st.write("<br><br><br><br>", unsafe_allow_html=True)
-    
-    # Judul Utama di Tengah
     st.markdown("<h1 style='text-align: center; font-size: 3.5rem; color: #1E1E1E;'>Pencari Celah Riset</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #666; margin-bottom: 30px;'>Ajukan topik penelitian, AI akan membaca jurnal dan merumuskan celah kebaruannya.</p>", unsafe_allow_html=True)
     
-    # Kolom agar input pencarian tidak terlalu lebar di layar PC
     col1, col2, col3 = st.columns([1, 4, 1])
     with col2:
         st.text_input(
             "Pencarian Utama", 
             key="input_topik", 
             label_visibility="collapsed", 
-            placeholder="Tulis topikmu di sini (misal: AI untuk stunting di puskesmas)...",
+            placeholder="Tulis topikmu di sini (misal: optimism academic, AI stunting)...",
             on_change=mulai_pencarian
         )
         
-        # Pengaturan disembunyikan dalam tombol expander agar bersih
-        with st.expander("⚙️ Pengaturan & Kunci API"):
+        with st.expander("⚙️ Pengaturan & Kunci API (Opsional)"):
             default_api = st.secrets.get("GEMINI_API_KEY", "")
             kunci_api = st.text_input("Gemini API Key:", value=default_api, type="password", key="api_utama")
             cakupan = st.selectbox("Sumber Jurnal:", ["Gabungan (Global + Indonesia)", "Khusus Riset Indonesia", "Internasional Saja"], key="cakupan_utama")
             tahun = st.slider("Tahun Minimal:", 2018, 2026, 2022, key="tahun_utama")
 
 # ==========================================
-# 2. TAMPILAN HASIL (SEPERTI PERPLEXITY)
+# 2. TAMPILAN HASIL (ANALISIS AI)
 # ==========================================
 else:
-    st.button("← Kembali Beranda", on_click=reset_pencarian)
+    st.button("← Kembali ke Beranda", on_click=reset_pencarian)
     
     topik = st.session_state.topik_riset
     kunci_api = st.session_state.get("api_utama", st.secrets.get("GEMINI_API_KEY", ""))
@@ -165,23 +171,27 @@ else:
     st.markdown("---")
     
     if not kunci_api:
-        st.error("Silakan masukkan Gemini API Key di pengaturan sebelumnya.")
+        st.error("⚠️ Silakan klik 'Kembali ke Beranda', buka Pengaturan, lalu masukkan Gemini API Key terlebih dahulu.")
         st.stop()
         
-    with st.status("🤖 Menganalisis sumber akademik...", expanded=True) as status:
+    with st.status("🤖 Menghubungi database jurnal internasional...", expanded=True) as status:
         st.write("Mengumpulkan literatur ilmiah...")
         papers = ambil_korpus_ilmiah(topik, cakupan, tahun, 6)
         
         if not papers:
             status.update(label="Gagal Menemukan Jurnal", state="error")
-            st.error("Tidak ditemukan jurnal yang cocok. Coba kata kunci lain.")
+            st.warning("⚠️ Tidak ada jurnal yang cocok, ATAU koneksi ke database sedang sibuk. Silakan ubah Tahun Minimal menjadi lebih lama, atau gunakan kata kunci lain.")
             st.stop()
             
-        st.write("Membedah abstrak dan merumuskan celah riset...")
-        analisis = bedah_celah_riset(topik, papers, cakupan, kunci_api)
-        status.update(label="Selesai Menganalisis", state="complete", expanded=False)
+        st.write(f"Berhasil menemukan {len(papers)} jurnal! Membedah abstrak dan merumuskan celah riset...")
+        try:
+            analisis = bedah_celah_riset(topik, papers, cakupan, kunci_api)
+            status.update(label="Selesai Menganalisis!", state="complete", expanded=False)
+        except Exception as e:
+            status.update(label="Gagal Menganalisis", state="error")
+            st.error(f"Gemini API bermasalah (mungkin kuota habis atau Key salah): {e}")
+            st.stop()
         
-    # Layout Jawaban Utama & Sumber
     col_jawaban, col_sumber = st.columns([6, 3], gap="large")
     
     with col_jawaban:
@@ -191,7 +201,7 @@ else:
         
     with col_sumber:
         st.markdown("### 📚 Sumber Rujukan")
-        st.caption("Jurnal yang digunakan AI untuk menghasilkan laporan ini.")
+        st.caption("Jurnal asli yang dibaca AI.")
         for i, p in enumerate(papers, 1):
             st.markdown(f"""
             <div class="source-card">
